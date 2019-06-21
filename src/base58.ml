@@ -27,7 +27,7 @@ module Alphabet = struct
       if Bytes.get str char <> '\255' then
         Format.kasprintf invalid_arg
           "Base58: invalid alphabet (dup '%c' %d %d)"
-        (char_of_int char) (int_of_char @@ Bytes.get str char) i ;
+          (char_of_int char) (int_of_char @@ Bytes.get str char) i ;
       Bytes.set str char (char_of_int i) ;
     done ;
     { encode = alphabet ; decode = Bytes.to_string str }
@@ -40,6 +40,17 @@ module Alphabet = struct
     make "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
 
   let default = bitcoin
+
+  let all_in_alphabet alphabet string =
+    let ok = Array.make 256 false in
+    String.iter (fun x -> ok.(Char.code x) <- true) alphabet.encode ;
+    let res = ref true in
+    for i = 0 to (String.length string) - 1 do
+      res := !res && ok.(Char.code string.[i])
+    done;
+    !res
+
+  let pp ppf { encode ; _ } = Format.fprintf ppf "%s" encode
 
 end
 
@@ -61,7 +72,7 @@ let count_leading_char s c =
 
 let of_char ?(alphabet=Alphabet.default) x =
   let pos = String.get alphabet.decode (int_of_char x) in
-  if pos = '\255' then failwith "Invalid data" ;
+  if pos = '\255' then invalid_arg @@ Printf.sprintf "Base58.of_char: '%c'" x ;
   int_of_char pos
 
 let to_char ?(alphabet=Alphabet.default) x =
@@ -75,15 +86,14 @@ let raw_encode ?(alphabet=Alphabet.default) s =
   let res_len = (len * 8 + 4) / 5 in
   let res = Bytes.make res_len '\000' in
   let s = Z.of_bits s in
-  let rec loop s =
-    if s = Z.zero then 0 else
-    let s, r = Z.div_rem s zbase in
-    let i = loop s in
-    Bytes.set res i (to_char ~alphabet (Z.to_int r)) ;
-    i + 1 in
-  let i = loop s in
-  let res = Bytes.sub_string res 0 i in
-  String.make zeros zero ^ res
+  let rec loop s i =
+    if s = Z.zero then i else
+      let s, r = Z.div_rem s zbase in
+      Bytes.set res i (to_char ~alphabet (Z.to_int r)) ;
+      loop s (i - 1) in
+  let i = loop s (res_len - 1) in
+  let ress = Bytes.sub_string res (i + 1) (res_len - i - 1) in
+  String.make zeros zero ^ ress
 
 let raw_decode ?(alphabet=Alphabet.default) s =
   let zero = alphabet.encode.[0] in
@@ -91,9 +101,9 @@ let raw_decode ?(alphabet=Alphabet.default) s =
   let len = String.length s in
   let rec loop res i =
     if i = len then res else
-    let x = Z.of_int (of_char ~alphabet (String.get s i)) in
-    let res = Z.(add x (mul res zbase)) in
-    loop res (i+1)
+      let x = Z.of_int (of_char ~alphabet (String.get s i)) in
+      let res = Z.(add x (mul res zbase)) in
+      loop res (i+1)
   in
   let res = Z.to_bits @@ loop Z.zero zeros in
   let res_tzeros = count_trailing_char res '\000' in
@@ -197,12 +207,12 @@ module Tezos = struct
   let sub_or_fail str start len error_msg =
     try String.sub str start len with _ ->
       invalid_arg
-        (Printf.sprintf "Tezos.of_bytes: %s must be %d bytes long"
+        (Printf.sprintf "Base58.Tezos.of_bytes: %s must be %d bytes long"
            error_msg (len - start))
 
   let t_of_bytes bytes =
     if String.length bytes < 2 then
-      invalid_arg "Tezos.of_bytes: str < 2" ;
+      invalid_arg "Base58.Tezos.of_bytes: str < 2" ;
     match chars_of_string bytes with
     | '\001' :: '\052' :: _ ->
       { version = Block ; payload = sub_or_fail bytes 2 32 "block" }
@@ -241,7 +251,7 @@ module Tezos = struct
 
   let of_base58_exn c b58 =
     match to_bytes c b58 with
-    | None -> invalid_arg "Tezos.of_base58_exn: not base58 data"
+    | None -> invalid_arg "Base58.Tezos.of_base58_exn: not base58 data"
     | Some bytes -> t_of_bytes bytes
 
   let to_base58 c { version ; payload } =
